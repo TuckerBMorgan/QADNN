@@ -2,7 +2,7 @@ extern crate nalgebra as na;
 use na::{DMatrix};
 
 extern crate mnist;
-
+use mnist::{Mnist, MnistBuilder};
 use rand::distributions::{Normal, Distribution};
 use rand::prelude::*;
 
@@ -91,9 +91,69 @@ fn train(test_inputs: Vec<DMatrix<f32>>, network: &mut Vec<DMatrix<f32>>, expcte
     }
 }
 
+fn validate_network() {
+    
+}
+
+fn load_data() -> (Vec<DMatrix<f32>>, Vec<DMatrix<f32>>, Vec<DMatrix<f32>>, Vec<DMatrix<f32>>) {
+    let (trn_size, val_size, rows, cols) = (50_000, 10000, 28, 28);
+    let Mnist { trn_img, trn_lbl, val_img, val_lbl, ..} = MnistBuilder::new()
+        .label_format_digit()
+        .training_set_length(trn_size)
+        .validation_set_length(val_size)
+        .test_set_length(10_000)
+        .finalize();
+
+
+
+    //TRAINING SET
+    //Conver the images into single sets of data, and map them from 0-255 space into 0.0 - 1.0 space
+    //And flatten out the images themselves, as this is a for a dense network that handles all of the images as a flat buffer
+    let mut training_data = vec![];
+    let sub_section_size = rows * cols;
+    for i in 0..trn_size {
+        let offset = (i * sub_section_size) as usize;
+        let subsection = &trn_img[offset..(offset + sub_section_size as usize)];
+        //We need the data in 0.0 -> 1.0f32 hence the map at the end
+        let single_training_input = DMatrix::from_vec(1, rows as usize * cols as usize, subsection.to_vec()).map(|x| (x as f32) / 255.0f32);
+        training_data.push(single_training_input);
+    }
+
+    //One hot encode all of the labels
+    let mut training_labels = vec![];
+    for train_label_index in 0..trn_lbl.len() {
+        let mut label_vec = vec![0.0f32; 10];
+        label_vec[trn_lbl[train_label_index] as usize] = 1.0f32;
+        training_labels.push(DMatrix::from_vec(1, 10, label_vec));
+    }
+
+    //VALIDATION SET
+    //Conver the images into single sets of data, and map them from 0-255 space into 0.0 - 1.0 space
+    //And flatten out the images themselves, as this is a for a dense network that handles all of the images as a flat buffer
+    let mut validation_data = vec![];
+    let sub_section_size = rows * cols;
+    for i in 0..val_size {
+        let offset = (i * sub_section_size) as usize;
+        let subsection = &val_img[offset..(offset + sub_section_size as usize)];
+        //We need the data in 0.0 -> 1.0f32 hence the map at the end
+        let single_training_input = DMatrix::from_vec(1, rows as usize * cols as usize, subsection.to_vec()).map(|x| (x as f32) / 255.0f32);
+        validation_data.push(single_training_input);
+    }
+
+    //One hot encode all of the labels of the validation test set
+    let mut validation_labels = vec![];
+    for train_label_index in 0..val_lbl.len() {
+        let mut label_vec = vec![0.0f32; 10];
+        label_vec[val_lbl[train_label_index] as usize] = 1.0f32;
+        validation_labels.push(DMatrix::from_vec(1, 10, label_vec));
+    }
+    
+    return (training_data, training_labels, validation_data, validation_labels);
+}
+
 fn main() {
+    //Load the data
+    let (training_data, training_labels, validation_data, validation_labels) = load_data();
     let mut network = vec![linear_layer(28 * 28, 128), linear_layer(128, 10)];
-    let fake_input = DMatrix::from_vec(1, 28 * 28, vec![1.0f32; 28 * 28]);
-    let expected = DMatrix::from_vec(1, 10, vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ]);
-    train(vec![fake_input], &mut network, vec![expected], 100);    
+    train(training_data, &mut network, training_labels, 100);    
 }
