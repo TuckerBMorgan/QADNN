@@ -6,6 +6,8 @@ use mnist::{Mnist, MnistBuilder};
 use rand::distributions::{Normal, Distribution};
 use rand::prelude::*;
 
+type Layer = (DMatrix<f32>, (Fn(f32) -> f32, Fn(f32) -> f32));
+
 pub fn create_linear_layer(size_of_inputs: usize, number_of_weights: usize,) -> DMatrix<f32> {
     return DMatrix::from_vec(size_of_inputs, number_of_weights, vec![0.0f32; number_of_weights * size_of_inputs]);
 }
@@ -76,23 +78,32 @@ fn update_weights(input: &DMatrix<f32>, layer: &mut DMatrix<f32>, delta: &DMatri
     return layer.zip_map(&adjusted_deltas, |a, b| a + b);
 }
 
-fn train(test_inputs: Vec<DMatrix<f32>>, network: &mut Vec<DMatrix<f32>>, expcted_outputs: Vec<DMatrix<f32>>, training_loops: usize)  {
+fn train(test_inputs: &Vec<DMatrix<f32>>, network: &mut Vec<DMatrix<f32>>, expcted_outputs: &Vec<DMatrix<f32>>, training_loops: usize)  {
     let mut rng = rand::thread_rng();
-    for i in 0..training_loops {
+    for _ in 0..training_loops {
         let example_index = rng.gen_range(0, test_inputs.len());
-        println!("Starting loops {} of training", i);
         let mut inputs = forward(&(test_inputs[example_index]), &network);
         let mut per_layer_deltas = backword(&expcted_outputs[example_index], &inputs[inputs.len() - 1], &network, &inputs);
         let per_layer_deltas : Vec<_> = per_layer_deltas.iter_mut().map(|x|x).rev().collect();
         let _ = inputs.pop();
-        for i in 0..inputs.len() {
-            update_weights(&inputs[i], &mut network[i], &per_layer_deltas[i], 0.0f32);
+        for x in 0..inputs.len() {
+            update_weights(&inputs[x], &mut network[x], &per_layer_deltas[x], 0.0f32);
         }
     }
 }
 
-fn validate_network() {
-    
+fn validate_network(network: &Vec<DMatrix<f32>>, validation_input: &Vec<DMatrix<f32>>, validation_labels: &Vec<DMatrix<f32>>) -> f32 {
+    let mut total_summed_error = 0.0f32;
+    for i in 0..validation_input.len() {
+        let result = forward(&validation_input[i], &network);
+        let error = &result[result.len() - 1] - &validation_labels[i];
+        let summed_sqaured_error = error.map(|x|x * x).fold(0.0f32, |x, y| x + y);
+        total_summed_error += summed_sqaured_error;
+        if i % 100 == 0 {
+            println!("{}% Done with validation ", i as f32 / 10000f32);
+        }
+    }
+    total_summed_error
 }
 
 fn load_data() -> (Vec<DMatrix<f32>>, Vec<DMatrix<f32>>, Vec<DMatrix<f32>>, Vec<DMatrix<f32>>) {
@@ -155,5 +166,9 @@ fn main() {
     //Load the data
     let (training_data, training_labels, validation_data, validation_labels) = load_data();
     let mut network = vec![linear_layer(28 * 28, 128), linear_layer(128, 10)];
-    train(training_data, &mut network, training_labels, 100);    
+    for i in 0..10 {
+        println!("Starting training run # {}", i);
+        train(&training_data, &mut network, &training_labels, 10000);
+        println!("Error for run number {} : {}", i, validate_network(&network, &validation_data, &validation_labels));
+    }
 }
