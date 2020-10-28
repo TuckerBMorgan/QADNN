@@ -6,11 +6,52 @@ use mnist::{Mnist, MnistBuilder};
 use rand::distributions::{Normal, Distribution};
 use rand::prelude::*;
 
-type Layer = (DMatrix<f32>, (Fn(f32) -> f32, Fn(f32) -> f32));
+fn relu(x: &DMatrix<f32>) -> DMatrix<f32> {
+    x.map(|x|{
+        if x > 0.0f32 {
+            return x;
+        }
+        return 0f32;
+    })
+}
+
+fn relu_derivative(x: &DMatrix<f32>) -> DMatrix<f32> {
+    x.map(|x|{
+        if x > 0.0f32 {
+            return 1.0f32;
+        }
+        else if x == 0.0f32 {
+            return 0.5f32;
+        }
+        return 0.0f32;
+    })
+}
+
+fn tanh(x: &DMatrix<f32>) -> DMatrix<f32> {
+    x.map(|x|{
+        x.tanh()
+    })
+}
+
+fn tanh_derivative(x: &DMatrix<f32>) -> DMatrix<f32> {
+    x.map(|x|{
+        1.0f32 - (x.tanh() * x.tanh())
+    })
+}
+
+pub type Layer = (DMatrix<f32>,  (fn(&DMatrix<f32>) -> DMatrix<f32>, fn(&DMatrix<f32>) -> DMatrix<f32>));
+
+pub enum ActivationFunction {
+    relu,
+    softmax,
+    tanh
+}
+
 
 pub fn create_linear_layer(size_of_inputs: usize, number_of_weights: usize,) -> DMatrix<f32> {
     return DMatrix::from_vec(size_of_inputs, number_of_weights, vec![0.0f32; number_of_weights * size_of_inputs]);
 }
+
 
 pub fn linear_layer(size_of_inputs: usize, number_of_weights: usize) -> DMatrix<f32> {
     let mut zeroed_layer = create_linear_layer(size_of_inputs, number_of_weights);
@@ -18,20 +59,37 @@ pub fn linear_layer(size_of_inputs: usize, number_of_weights: usize) -> DMatrix<
     zeroed_layer.map(|_| normal.sample(&mut rand::thread_rng()) as f32)
 }
 
+pub fn linear_layer_with_function(size_of_inputs: usize, number_of_weights: usize, activation_function: ActivationFunction) -> Layer {
+    let mut zeroed_layer = create_linear_layer(size_of_inputs, number_of_weights);
+    let normal = Normal::new(0.0, 1.0 / (1.0 / (number_of_weights * size_of_inputs) as f64).sqrt());
+    let random_init_layer = zeroed_layer.map(|_| normal.sample(&mut rand::thread_rng()) as f32);
+
+
+    let function : (fn(&DMatrix<f32>) -> DMatrix<f32>, fn(&DMatrix<f32>) -> DMatrix<f32>);
+    match activation_function {
+        ActivationFunction::relu => {
+            function = (relu, relu_derivative);
+        },
+        ActivationFunction::softmax =>  {
+            function = (relu, relu_derivative);
+        },
+        ActivationFunction::tanh => {
+            function = (tanh, tanh_derivative);
+        }
+    }
+
+    return (random_init_layer, function);
+}
+
 /// Runs the network forward, return the output of each layer in the network, and the input to network itself
-fn forward(input: &DMatrix<f32>, network: &Vec<DMatrix<f32>>) -> Vec<DMatrix<f32>> {
+fn forward(input: &DMatrix<f32>, network: &Vec<Layer>) -> Vec<DMatrix<f32>> {
     let mut inputs = vec![input.clone()];
     //Foreach layer in the network
-    for n in network {
+    for (n, f) in network {
         //Multiply the last input to be placed in the inputs array by the weights of the network
         let result = &inputs[inputs.len() - 1] * n;
         //Push it through its nonlineraity
-        let rectified_ouput = result.map(|x|{
-            if x > 0.0f32 {
-                return x;
-            }
-            return 0f32;
-        });
+        let rectified_ouput = (f.0)(&result);
         //place into the inputs
         inputs.push(rectified_ouput);
     }
@@ -39,7 +97,7 @@ fn forward(input: &DMatrix<f32>, network: &Vec<DMatrix<f32>>) -> Vec<DMatrix<f32
     return inputs;
 }
 
-fn backword(expected: &DMatrix<f32>, actual: &DMatrix<f32>, network: &Vec<DMatrix<f32>>, outputs: &Vec<DMatrix<f32>>) -> Vec<DMatrix<f32>> {
+fn backword(expected: &DMatrix<f32>, actual: &DMatrix<f32>, network: &Vec<Layer>, outputs: &Vec<DMatrix<f32>>) -> Vec<DMatrix<f32>> {
     //Mean Squared difference.... not really
     let intial_difference = (expected - actual).map(|x| x * x);
 
@@ -49,17 +107,8 @@ fn backword(expected: &DMatrix<f32>, actual: &DMatrix<f32>, network: &Vec<DMatri
     
     //Foreach output from the network, calcualte the derivate
     let mut count = 0;
-    for n in network.iter().rev() {
-        let derivative_of_output = outputs[(outputs.len() - 1) - count].map(|x| {
-            if x > 0.0f32 {
-                return 1.0f32;
-            }
-            else if x == 0.0f32 {
-                return 0.5f32;
-            }
-            return 0.0f32;
-        });
-        
+    for (n, f) in network.iter().rev() {
+        let derivative_of_output = (f.1)(&outputs[(outputs.len() - 1) - count]);
         //multiply each error by its dervaitve
         let delta = derivative_of_output.zip_map(&errors[errors.len() -1], |a, b| a * b);
         deltas.push(delta);
@@ -78,7 +127,8 @@ fn update_weights(input: &DMatrix<f32>, layer: &mut DMatrix<f32>, delta: &DMatri
     return layer.zip_map(&adjusted_deltas, |a, b| a + b);
 }
 
-fn train(test_inputs: &Vec<DMatrix<f32>>, network: &mut Vec<DMatrix<f32>>, expcted_outputs: &Vec<DMatrix<f32>>, training_loops: usize)  {
+
+fn train(test_inputs: &Vec<DMatrix<f32>>, network: &mut Vec<Layer>, expcted_outputs: &Vec<DMatrix<f32>>, training_loops: usize)  {
     let mut rng = rand::thread_rng();
     for _ in 0..training_loops {
         let example_index = rng.gen_range(0, test_inputs.len());
@@ -87,12 +137,12 @@ fn train(test_inputs: &Vec<DMatrix<f32>>, network: &mut Vec<DMatrix<f32>>, expct
         let per_layer_deltas : Vec<_> = per_layer_deltas.iter_mut().map(|x|x).rev().collect();
         let _ = inputs.pop();
         for x in 0..inputs.len() {
-            update_weights(&inputs[x], &mut network[x], &per_layer_deltas[x], 0.0f32);
+            update_weights(&inputs[x], &mut network[x].0, &per_layer_deltas[x], 0.0f32);
         }
     }
 }
 
-fn validate_network(network: &Vec<DMatrix<f32>>, validation_input: &Vec<DMatrix<f32>>, validation_labels: &Vec<DMatrix<f32>>) -> f32 {
+fn validate_network(network: &Vec<Layer>, validation_input: &Vec<DMatrix<f32>>, validation_labels: &Vec<DMatrix<f32>>) -> f32 {
     let mut total_summed_error = 0.0f32;
     for i in 0..validation_input.len() {
         let result = forward(&validation_input[i], &network);
@@ -165,10 +215,10 @@ fn load_data() -> (Vec<DMatrix<f32>>, Vec<DMatrix<f32>>, Vec<DMatrix<f32>>, Vec<
 fn main() {
     //Load the data
     let (training_data, training_labels, validation_data, validation_labels) = load_data();
-    let mut network = vec![linear_layer(28 * 28, 128), linear_layer(128, 10)];
+    let mut network_with_function = vec![linear_layer_with_function(28 * 28, 128, ActivationFunction::tanh), linear_layer_with_function(128, 10, ActivationFunction::tanh)];
     for i in 0..10 {
         println!("Starting training run # {}", i);
-        train(&training_data, &mut network, &training_labels, 10000);
-        println!("Error for run number {} : {}", i, validate_network(&network, &validation_data, &validation_labels));
+        train(&training_data, &mut network_with_function, &training_labels, 10000);
+        println!("Error for run number {} : {}", i, validate_network(&network_with_function, &validation_data, &validation_labels));
     }
 }
